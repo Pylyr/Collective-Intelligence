@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image"
 	"image/color"
 	"math"
 	"math/rand"
@@ -9,16 +10,27 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 )
 
-// Grid dimensions
 const (
 	Width            = 50
 	Height           = 50
-	SellerSize       = 10
-	TransportCost    = 1
-	PriceSensitivity = 0.3
-	NumberOfSellers  = 10
+	SellerSize       = 15
+	TransportCost    = 0.2
+	PriceSensitivity = 1
+	MaxPrice         = 20
+	StartPrice       = 10
+	NumberOfSellers  = 3
+)
+
+// Graph constants
+const (
+	GraphWidth  = 400
+	GraphHeight = Height*SellerSize - 100
+	BarWidth    = 20
 )
 
 // Seller struct
@@ -57,11 +69,16 @@ func initializeSellers(numSellers int) []Seller {
 	return sellers
 }
 
-// Calculate distance between two points using Euclidean distance
 func distance(x1, y1 int, seller Seller) float64 {
 	x2, y2 := seller.X, seller.Y
+
+	// Euclidean distance for transport cost
 	transportCost := TransportCost * math.Sqrt(math.Pow(float64(x1-x2), 2)+math.Pow(float64(y1-y2), 2))
-	priceCost := PriceSensitivity * math.Abs(float64(seller.Price))
+
+	// Non-linear price sensitivity using a logarithmic function
+	priceCost := PriceSensitivity * float64(seller.Price) * math.Log1p(transportCost)
+
+	// Total cost = transport cost + price cost
 	return transportCost + priceCost
 }
 
@@ -143,6 +160,7 @@ func moveSellers(sellers []Seller) {
 		}
 
 		sellers[i].X, sellers[i].Y, sellers[i].Price = bestX, bestY, bestPrice
+		sellers[i].Revenue = bestRevenue
 	}
 }
 
@@ -153,8 +171,19 @@ func (g *Game) Update() error {
 	return nil
 }
 
-// Draw game state
-func (g *Game) Draw(screen *ebiten.Image) {
+func drawText(screen *ebiten.Image, text string, x, y int) {
+	face := basicfont.Face7x13
+
+	d := &font.Drawer{
+		Dst:  screen,
+		Src:  image.White,
+		Face: face,
+		Dot:  fixed.Point26_6{X: fixed.I(x), Y: fixed.I(y)},
+	}
+	d.DrawString(text)
+}
+
+func (g *Game) DrawSimulation(screen *ebiten.Image) {
 	for x := 0; x < Width; x++ {
 		for y := 0; y < Height; y++ {
 			seller := findClosestSeller(g.sellers, x, y)
@@ -186,10 +215,66 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%d", seller.Price), seller.X*SellerSize, seller.Y*SellerSize)
 	}
 }
+func (g *Game) DrawRevenueGraph(screen *ebiten.Image) {
+	// Calculate everyone's revenue
+	for i := range g.sellers {
+		g.sellers[i].Revenue = 0
+	}
+	simulateDay(g.sellers)
+
+	// Scale factor to fit the graph within the screen
+	maxRevenue := 0
+	for _, seller := range g.sellers {
+		if seller.Revenue > maxRevenue {
+			maxRevenue = seller.Revenue
+		}
+	}
+
+	scaleFactor := float64(GraphHeight) / float64(maxRevenue)
+	xOffset := Width*SellerSize + 100
+
+	// Draw the title
+	title := "Daily Revenue per Seller"
+	// make the text big
+	drawText(screen, title, xOffset+30, 30)
+
+	// Draw bars
+	for i, seller := range g.sellers {
+		barHeight := float64(seller.Revenue) * scaleFactor
+		barX := xOffset + i*BarWidth
+		barY := GraphHeight - int(barHeight) + 60 // Adjust for title space
+		rgba := seller.Color.(color.RGBA)
+		rgba.R /= 2
+		rgba.G /= 2
+		rgba.B /= 2
+
+		ebitenutil.DrawRect(screen, float64(barX), float64(barY), float64(BarWidth), barHeight, rgba)
+	}
+
+	// Draw scale
+	for i := 0; i <= 5; i++ {
+		scaleValue := int(float64(maxRevenue) * float64(i) / 5)
+		y := GraphHeight - int(float64(i*GraphHeight/5)) + 60 // Adjust for title space
+
+		// Draw tick lines
+		ebitenutil.DrawLine(screen, float64(xOffset)-5, float64(y), float64(xOffset), float64(y), color.White)
+
+		// Draw scale labels
+		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%d", scaleValue), xOffset-40, y-5)
+	}
+}
+
+// Draw game state
+func (g *Game) Draw(screen *ebiten.Image) {
+	// make the background white
+	// screen.Fill(color.White)
+	g.DrawSimulation(screen)
+	g.DrawRevenueGraph(screen)
+}
 
 // Layout specifies the game's screen size
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return Width * SellerSize, Height * SellerSize
+	return Width*SellerSize + 100 + GraphWidth, Height * SellerSize
 }
 
 func main() {
@@ -201,7 +286,9 @@ func main() {
 	ebiten.SetWindowSize(Width*SellerSize, Height*SellerSize)
 	ebiten.SetWindowTitle("2D Seller Simulation")
 
+	// Graph window
 	if err := ebiten.RunGame(game); err != nil {
 		fmt.Println(err)
 	}
+
 }

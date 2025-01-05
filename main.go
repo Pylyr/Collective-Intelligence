@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/png"
 	"math"
 	"math/rand"
+	"os"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -19,16 +21,15 @@ const (
 	Width            = 50
 	Height           = 50
 	SellerSize       = 15
-	TransportCost    = 0.2
+	TransportCost    = 1
 	PriceSensitivity = 1
 	MaxPrice         = 20
 	StartPrice       = 10
-	NumberOfSellers  = 3
+	NSellers         = 2
 )
 
 // Graph constants
 const (
-	GraphWidth  = 400
 	GraphHeight = Height*SellerSize - 100
 	BarWidth    = 20
 )
@@ -36,7 +37,7 @@ const (
 // Seller struct
 type Seller struct {
 	X, Y                   int
-	Revenue                int
+	Revenue                float64
 	MovementAggressiveness float64
 	Color                  color.Color
 	Price                  int
@@ -44,8 +45,8 @@ type Seller struct {
 
 // Game struct
 type Game struct {
-	sellers    []Seller
-	lastUpdate time.Time
+	sellers []Seller
+	turns   int
 }
 
 // Random color
@@ -76,7 +77,7 @@ func distance(x1, y1 int, seller Seller) float64 {
 	transportCost := TransportCost * math.Sqrt(math.Pow(float64(x1-x2), 2)+math.Pow(float64(y1-y2), 2))
 
 	// Non-linear price sensitivity using a logarithmic function
-	priceCost := PriceSensitivity * float64(seller.Price) * math.Log1p(transportCost)
+	priceCost := PriceSensitivity * float64(seller.Price)
 
 	// Total cost = transport cost + price cost
 	return transportCost + priceCost
@@ -101,7 +102,7 @@ func simulateDay(sellers []Seller) {
 	for x := 0; x < Width; x++ {
 		for y := 0; y < Height; y++ {
 			closest := findClosestSeller(sellers, x, y)
-			closest.Revenue += closest.Price
+			closest.Revenue += float64(closest.Price)
 		}
 	}
 }
@@ -121,7 +122,7 @@ func moveSellers(sellers []Seller) {
 
 		originalX, originalY, originalPrice := sellers[i].X, sellers[i].Y, sellers[i].Price
 		bestX, bestY, bestPrice := sellers[i].X, sellers[i].Y, sellers[i].Price
-		bestRevenue := -1
+		bestRevenue := -1.0
 
 		occupiedSpaces := make(map[[2]int]bool)
 		for j := range sellers {
@@ -132,10 +133,12 @@ func moveSellers(sellers []Seller) {
 		}
 
 		// lets say you can only move up, down, left, right
-		moves := [][3]int{{0, 1, -1}, {0, 1, 0}, {0, 1, 1},
-			{1, 0, -1}, {1, 0, 0}, {1, 0, 1},
-			{-1, 0, -1}, {-1, 0, 0}, {-1, 0, 1},
-			{0, -1, -1}, {0, -1, 0}, {0, -1, 1}}
+		// moves := [][3]int{{0, 1, -1}, {0, 1, 0}, {0, 1, 1},
+		// 	{1, 0, -1}, {1, 0, 0}, {1, 0, 1},
+		// 	{-1, 0, -1}, {-1, 0, 0}, {-1, 0, 1},
+		// 	{0, -1, -1}, {0, -1, 0}, {0, -1, 1},
+		// 	{0, 0, -1}, {0, 0, 0}, {0, 0, 1}}
+		moves := [][3]int{{0, 1, 0}, {1, 0, 0}, {-1, 0, 0}, {0, -1, 0}, {0, 0, -1}, {0, 0, 0}, {0, 0, 1}}
 		for _, move := range moves {
 			dx, dy, dPrice := move[0], move[1], move[2]
 			// cannot enter a space if there is already a seller there
@@ -144,7 +147,7 @@ func moveSellers(sellers []Seller) {
 			}
 
 			// cannot have a negative price
-			if originalPrice+dPrice < 0 {
+			if originalPrice+dPrice < 0 || originalPrice+dPrice > MaxPrice {
 				continue
 			}
 
@@ -164,10 +167,37 @@ func moveSellers(sellers []Seller) {
 	}
 }
 
+func (g *Game) saveScreenshot() {
+	img := ebiten.NewImage(Width*SellerSize+200+len(g.sellers)*BarWidth, Height*SellerSize)
+	g.Draw(img)
+
+	// make a name that reflects the run
+	fileName := fmt.Sprintf("Turn_%d_NS%d_TC_%d_PS_%d_MP_%d_SP_%d.png", g.turns, NSellers, TransportCost, PriceSensitivity, MaxPrice, StartPrice)
+
+	file, err := os.Create(fileName)
+	if err != nil {
+		fmt.Println("Failed to create file:", err)
+		return
+	}
+	defer file.Close()
+
+	if err := png.Encode(file, img); err != nil {
+		fmt.Println("Failed to encode image:", err)
+		return
+	}
+
+	fmt.Println("Screenshot saved as simulation_turn_100.png")
+}
+
 // Update game state
 func (g *Game) Update() error {
 	moveSellers(g.sellers)
-	g.lastUpdate = time.Now()
+	g.turns++
+
+	if g.turns%100 == 0 {
+		g.saveScreenshot()
+	}
+
 	return nil
 }
 
@@ -223,7 +253,7 @@ func (g *Game) DrawRevenueGraph(screen *ebiten.Image) {
 	simulateDay(g.sellers)
 
 	// Scale factor to fit the graph within the screen
-	maxRevenue := 0
+	maxRevenue := 0.0
 	for _, seller := range g.sellers {
 		if seller.Revenue > maxRevenue {
 			maxRevenue = seller.Revenue
@@ -236,7 +266,7 @@ func (g *Game) DrawRevenueGraph(screen *ebiten.Image) {
 	// Draw the title
 	title := "Daily Revenue per Seller"
 	// make the text big
-	drawText(screen, title, xOffset+30, 30)
+	drawText(screen, title, xOffset-50, 30)
 
 	// Draw bars
 	for i, seller := range g.sellers {
@@ -267,20 +297,20 @@ func (g *Game) DrawRevenueGraph(screen *ebiten.Image) {
 // Draw game state
 func (g *Game) Draw(screen *ebiten.Image) {
 	// make the background white
-	// screen.Fill(color.White)
+	// screen.Fill(color.Black)
 	g.DrawSimulation(screen)
 	g.DrawRevenueGraph(screen)
 }
 
 // Layout specifies the game's screen size
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return Width*SellerSize + 100 + GraphWidth, Height * SellerSize
+	return Width*SellerSize + 200 + len(g.sellers)*BarWidth, Height * SellerSize
 }
 
 func main() {
 
 	rand.Seed(time.Now().UnixNano())
-	sellers := initializeSellers(NumberOfSellers)
+	sellers := initializeSellers(NSellers)
 	game := &Game{sellers: sellers}
 
 	ebiten.SetWindowSize(Width*SellerSize, Height*SellerSize)

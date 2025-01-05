@@ -13,17 +13,21 @@ import (
 
 // Grid dimensions
 const (
-	Width      = 50
-	Height     = 50
-	SellerSize = 5
+	Width            = 50
+	Height           = 50
+	SellerSize       = 10
+	TransportCost    = 1
+	PriceSensitivity = 0.3
+	NumberOfSellers  = 10
 )
 
 // Seller struct
 type Seller struct {
-	X, Y                   float64
-	Points                 int
+	X, Y                   int
+	Revenue                int
 	MovementAggressiveness float64
 	Color                  color.Color
+	Price                  int
 }
 
 // Game struct
@@ -42,27 +46,31 @@ func initializeSellers(numSellers int) []Seller {
 	sellers := make([]Seller, numSellers)
 	for i := range sellers {
 		sellers[i] = Seller{
-			X:                      float64(rand.Intn(Width)),
-			Y:                      float64(rand.Intn(Height)),
-			Points:                 0,
-			MovementAggressiveness: rand.Float64(),
+			X:                      rand.Intn(Width),
+			Y:                      rand.Intn(Height),
+			Revenue:                0,
+			MovementAggressiveness: 1,
 			Color:                  randomColor(),
+			Price:                  20,
 		}
 	}
 	return sellers
 }
 
-// Calculate distance between two points
-func distance(x1, y1, x2, y2 float64) float64 {
-	return math.Sqrt(math.Pow(x2-x1, 2) + math.Pow(y2-y1, 2))
+// Calculate distance between two points using Euclidean distance
+func distance(x1, y1 int, seller Seller) float64 {
+	x2, y2 := seller.X, seller.Y
+	transportCost := TransportCost * math.Sqrt(math.Pow(float64(x1-x2), 2)+math.Pow(float64(y1-y2), 2))
+	priceCost := PriceSensitivity * math.Abs(float64(seller.Price))
+	return transportCost + priceCost
 }
 
 // Find closest seller
-func findClosestSeller(sellers []Seller, x, y float64) *Seller {
+func findClosestSeller(sellers []Seller, x, y int) *Seller {
 	var closest *Seller
 	minDistance := math.MaxFloat64
 	for i := range sellers {
-		d := distance(x, y, sellers[i].X, sellers[i].Y)
+		d := distance(x, y, sellers[i])
 		if d < minDistance {
 			minDistance = d
 			closest = &sellers[i]
@@ -75,56 +83,66 @@ func findClosestSeller(sellers []Seller, x, y float64) *Seller {
 func simulateDay(sellers []Seller) {
 	for x := 0; x < Width; x++ {
 		for y := 0; y < Height; y++ {
-			closest := findClosestSeller(sellers, float64(x), float64(y))
-			closest.Points++
+			closest := findClosestSeller(sellers, x, y)
+			closest.Revenue += closest.Price
 		}
 	}
-}
-
-func isSpaceOccupied(sellers []Seller, x, y float64, excludeIndex int) bool {
-	for i := range sellers {
-		if i == excludeIndex {
-			continue
-		}
-		if sellers[i].X == x && sellers[i].Y == y {
-			return true
-		}
-	}
-	return false
 }
 
 // Calculate gradient and move seller towards higher paid region
 func moveSellers(sellers []Seller) {
 	for i := range sellers {
-		if rand.Float64() < sellers[i].MovementAggressiveness {
+		if sellers[i].MovementAggressiveness < 0.05 {
+			sellers[i].MovementAggressiveness = 0
+		}
+
+		if rand.Float64() > sellers[i].MovementAggressiveness {
 			continue
 		}
 
-		originalX, originalY := sellers[i].X, sellers[i].Y
+		// sellers[i].MovementAggressiveness *= 0.99
 
-		bestX, bestY := sellers[i].X, sellers[i].Y
-		bestPoints := -1
+		originalX, originalY, originalPrice := sellers[i].X, sellers[i].Y, sellers[i].Price
+		bestX, bestY, bestPrice := sellers[i].X, sellers[i].Y, sellers[i].Price
+		bestRevenue := -1
 
-		for dx := -1; dx <= 1; dx++ {
-			for dy := -1; dy <= 1; dy++ {
-				// cannot enter a space if there is already a seller there
-				if isSpaceOccupied(sellers, originalX+float64(dx), originalY+float64(dy), i) {
-					continue
-				}
+		occupiedSpaces := make(map[[2]int]bool)
+		for j := range sellers {
+			if i == j {
+				continue
+			}
+			occupiedSpaces[[2]int{sellers[j].X, sellers[j].Y}] = true
+		}
 
-				sellers[i].X, sellers[i].Y = originalX+float64(dx), originalY+float64(dy)
-				if sellers[i].X >= 0 && sellers[i].X < Width && sellers[i].Y >= 0 && sellers[i].Y < Height {
-					sellers[i].Points = 0
-					simulateDay(sellers)
-					if sellers[i].Points > bestPoints {
-						bestX, bestY = sellers[i].X, sellers[i].Y
-						bestPoints = sellers[i].Points
-					}
+		// lets say you can only move up, down, left, right
+		moves := [][3]int{{0, 1, -1}, {0, 1, 0}, {0, 1, 1},
+			{1, 0, -1}, {1, 0, 0}, {1, 0, 1},
+			{-1, 0, -1}, {-1, 0, 0}, {-1, 0, 1},
+			{0, -1, -1}, {0, -1, 0}, {0, -1, 1}}
+		for _, move := range moves {
+			dx, dy, dPrice := move[0], move[1], move[2]
+			// cannot enter a space if there is already a seller there
+			if occupiedSpaces[[2]int{originalX + dx, originalY + dy}] {
+				continue
+			}
+
+			// cannot have a negative price
+			if originalPrice+dPrice < 0 {
+				continue
+			}
+
+			sellers[i].X, sellers[i].Y, sellers[i].Price = originalX+dx, originalY+dy, originalPrice+dPrice
+			if sellers[i].X >= 0 && sellers[i].X < Width && sellers[i].Y >= 0 && sellers[i].Y < Height {
+				sellers[i].Revenue = 0
+				simulateDay(sellers)
+				if sellers[i].Revenue > bestRevenue {
+					bestX, bestY, bestPrice = sellers[i].X, sellers[i].Y, sellers[i].Price
+					bestRevenue = sellers[i].Revenue
 				}
 			}
 		}
 
-		sellers[i].X, sellers[i].Y = bestX, bestY
+		sellers[i].X, sellers[i].Y, sellers[i].Price = bestX, bestY, bestPrice
 	}
 }
 
@@ -137,9 +155,35 @@ func (g *Game) Update() error {
 
 // Draw game state
 func (g *Game) Draw(screen *ebiten.Image) {
+	for x := 0; x < Width; x++ {
+		for y := 0; y < Height; y++ {
+			seller := findClosestSeller(g.sellers, x, y)
+			rgba := seller.Color.(color.RGBA)
+
+			rgba.R /= 2
+			rgba.G /= 2
+			rgba.B /= 2
+
+			ebitenutil.DrawRect(screen, float64(x)*SellerSize, float64(y)*SellerSize, SellerSize, SellerSize, rgba)
+		}
+	}
+
+	// get the min price of sellers
+	minPrice, maxPrice := math.MaxInt64, 0
+	for _, seller := range g.sellers {
+		if seller.Price < minPrice {
+			minPrice = seller.Price
+		}
+		if seller.Price > maxPrice {
+			maxPrice = seller.Price
+		}
+	}
+
 	for _, seller := range g.sellers {
 
-		ebitenutil.DrawRect(screen, seller.X*SellerSize, seller.Y*SellerSize, SellerSize, SellerSize, seller.Color)
+		ebitenutil.DrawRect(screen, float64(seller.X*SellerSize), float64(seller.Y*SellerSize), SellerSize, SellerSize, seller.Color)
+		// draw the price inside the seller
+		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%d", seller.Price), seller.X*SellerSize, seller.Y*SellerSize)
 	}
 }
 
@@ -149,11 +193,9 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 }
 
 func main() {
-	ebiten.SetMaxTPS(10) // 10 ticks per second
 
 	rand.Seed(time.Now().UnixNano())
-	numSellers := 20
-	sellers := initializeSellers(numSellers)
+	sellers := initializeSellers(NumberOfSellers)
 	game := &Game{sellers: sellers}
 
 	ebiten.SetWindowSize(Width*SellerSize, Height*SellerSize)

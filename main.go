@@ -2,30 +2,30 @@ package main
 
 import (
 	"fmt"
-	"image"
 	"image/color"
 	"image/png"
 	"math"
 	"math/rand"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/basicfont"
-	"golang.org/x/image/math/fixed"
 )
 
 const (
 	Width            = 50
 	Height           = 50
 	SellerSize       = 15
-	TransportCost    = 1
+	TransportCost    = 2
 	PriceSensitivity = 1
 	MaxPrice         = 20
 	StartPrice       = 10
-	NSellers         = 2
+	NSellers         = 3
+	NTurns           = 100
+	NRepetitions     = 3000
+	NSimulations     = 20
 )
 
 // Graph constants
@@ -45,8 +45,9 @@ type Seller struct {
 
 // Game struct
 type Game struct {
-	sellers []Seller
-	turns   int
+	sellers         []Seller
+	turns           int
+	positionHistory map[string]int
 }
 
 // Random color
@@ -172,7 +173,7 @@ func (g *Game) saveScreenshot() {
 	g.Draw(img)
 
 	// make a name that reflects the run
-	fileName := fmt.Sprintf("Turn_%d_NS%d_TC_%d_PS_%d_MP_%d_SP_%d.png", g.turns, NSellers, TransportCost, PriceSensitivity, MaxPrice, StartPrice)
+	fileName := fmt.Sprintf("Turn_%d_NS%d_TC_%.1f_PS_%d_MP_%d_SP_%d.png", g.turns, NSellers, TransportCost, float64(PriceSensitivity), MaxPrice, StartPrice)
 
 	file, err := os.Create(fileName)
 	if err != nil {
@@ -194,23 +195,26 @@ func (g *Game) Update() error {
 	moveSellers(g.sellers)
 	g.turns++
 
+	// record the position of each seller
+	currentPositionCode := ""
+	for _, seller := range g.sellers {
+		currentPositionCode += fmt.Sprintf("%d,%d,%d;", seller.X, seller.Y, seller.Price)
+	}
+
+	g.positionHistory[currentPositionCode]++
+	if g.positionHistory[currentPositionCode] >= NRepetitions {
+		return fmt.Errorf("[0] Simulation stopped after %d turns due to repeated positions %s", g.turns, currentPositionCode)
+	}
+
+	if g.turns > NTurns {
+		return fmt.Errorf("[1] Simulation stopped after %d turns", g.turns)
+	}
+
 	if g.turns%100 == 0 {
 		g.saveScreenshot()
 	}
 
 	return nil
-}
-
-func drawText(screen *ebiten.Image, text string, x, y int) {
-	face := basicfont.Face7x13
-
-	d := &font.Drawer{
-		Dst:  screen,
-		Src:  image.White,
-		Face: face,
-		Dot:  fixed.Point26_6{X: fixed.I(x), Y: fixed.I(y)},
-	}
-	d.DrawString(text)
 }
 
 func (g *Game) DrawSimulation(screen *ebiten.Image) {
@@ -266,7 +270,7 @@ func (g *Game) DrawRevenueGraph(screen *ebiten.Image) {
 	// Draw the title
 	title := "Daily Revenue per Seller"
 	// make the text big
-	drawText(screen, title, xOffset-50, 30)
+	ebitenutil.DebugPrintAt(screen, title, xOffset-50, 20)
 
 	// Draw bars
 	for i, seller := range g.sellers {
@@ -297,7 +301,7 @@ func (g *Game) DrawRevenueGraph(screen *ebiten.Image) {
 // Draw game state
 func (g *Game) Draw(screen *ebiten.Image) {
 	// make the background white
-	// screen.Fill(color.Black)
+	screen.Fill(color.Black)
 	g.DrawSimulation(screen)
 	g.DrawRevenueGraph(screen)
 }
@@ -307,18 +311,55 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return Width*SellerSize + 200 + len(g.sellers)*BarWidth, Height * SellerSize
 }
 
-func main() {
+func runSimulations() {
+	// run the game without rendering to avoid the error
 
-	rand.Seed(time.Now().UnixNano())
+	repetitionCount := 0
+	for i := 1; i <= NSimulations; i++ {
+		sellers := initializeSellers(NSellers)
+		game := &Game{
+			sellers:         sellers,
+			positionHistory: make(map[string]int),
+		}
+
+		var err error
+		for {
+			err = game.Update()
+			if err != nil {
+				break
+			}
+			println(game.turns)
+		}
+
+		if err != nil && strings.HasPrefix(err.Error(), "[0]") {
+			repetitionCount++
+		}
+
+		fmt.Printf("Run %d: %s\n", i, err)
+	}
+
+	fmt.Printf("\nSimulation terminated due to position repetition %d out of %d times (%.2f%%). \n", repetitionCount, NSimulations, float64(repetitionCount)/float64(NSimulations)*100)
+}
+
+func runUI() {
 	sellers := initializeSellers(NSellers)
-	game := &Game{sellers: sellers}
+	game := &Game{
+		sellers:         sellers,
+		positionHistory: make(map[string]int),
+	}
 
 	ebiten.SetWindowSize(Width*SellerSize, Height*SellerSize)
 	ebiten.SetWindowTitle("2D Seller Simulation")
-
-	// Graph window
 	if err := ebiten.RunGame(game); err != nil {
 		fmt.Println(err)
 	}
+
+}
+
+func main() {
+	rand.Seed(time.Now().UnixNano())
+
+	// runSimulations()
+	runUI()
 
 }
